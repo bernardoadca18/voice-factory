@@ -23,6 +23,9 @@ class TestIntersamplePeak:
 
         When samples are taken at points that don't align with the waveform's true peaks,
         the reconstructed waveform can have peaks between samples (intersample peaks).
+
+        The test requires a MEASURABLE POSITIVE difference (> 0.01 dB) to prove
+        that True Peak is truly detecting intersample peaks, not just copying Sample Peak.
         """
         analyzer = Analyzer()
 
@@ -49,16 +52,13 @@ class TestIntersamplePeak:
             # Analyze the file
             analysis = analyzer.analyze(tmp_path)
 
-            # True Peak should be >= Sample Peak (intersample peaks are possible)
-            # For this specific signal, we expect a measurable difference
+            # True Peak MUST be >= Sample Peak (this is a fundamental property)
             assert analysis.true_peak_db >= analysis.sample_peak_db, (
                 f"True Peak ({analysis.true_peak_db:.3f} dBTP) should be >= "
                 f"Sample Peak ({analysis.sample_peak_db:.3f} dBFS)"
             )
 
-            # For signals near Nyquist, we often see measurable intersample peaks
-            # The difference should be at least measurable (not just floating point noise)
-            # We use a small threshold to account for measurement precision
+            # Calculate the difference
             difference = analysis.true_peak_db - analysis.sample_peak_db
 
             print(f"\nIntersample Peak Test Results:")
@@ -66,12 +66,17 @@ class TestIntersamplePeak:
             print(f"  True Peak:   {analysis.true_peak_db:.3f} dBTP")
             print(f"  Difference:  {difference:.3f} dB")
 
-            # We expect at least a small difference for this signal
-            # If they're identical, it suggests True Peak isn't being measured independently
-            # However, we allow for cases where they might be very close
-            assert difference >= -0.001, (
-                f"True Peak ({analysis.true_peak_db:.3f} dBTP) should not be less than "
-                f"Sample Peak ({analysis.sample_peak_db:.3f} dBFS) - indicates measurement issue"
+            # CRITICAL: True Peak MUST be measurably greater than Sample Peak
+            # for this specific signal designed to produce intersample peaks.
+            # We require at least 0.01 dB difference to prove that:
+            # 1. True Peak is detecting intersample peaks
+            # 2. True Peak is not just copying Sample Peak
+            # 3. The measurement has real precision
+            assert difference > 0.01, (
+                f"True Peak ({analysis.true_peak_db:.3f} dBTP) should be measurably greater than "
+                f"Sample Peak ({analysis.sample_peak_db:.3f} dBFS) for this intersample-peak signal. "
+                f"Difference of {difference:.3f} dB is too small - indicates True Peak may not be "
+                f"detecting intersample peaks properly."
             )
 
         finally:
@@ -235,14 +240,23 @@ class TestSafetyMarginPrecision:
         """
         Test that True Peak measurement has sufficient precision to see
         the 0.05 dB safety margin.
+
+        This test validates that the measurement can distinguish values
+        separated by less than 0.1 dB by:
+        1. Creating signals with specific known amplitudes
+        2. Verifying the measured True Peak matches the expected value
+        3. Confirming the precision is real (not just formatting)
         """
         analyzer = Analyzer()
 
-        # Create a test signal
+        # Test with a signal at a specific amplitude
+        # The key is that we get values with 3 decimals of real precision
         sample_rate = 44100
         duration = 1.0
         t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
-        signal = 0.5 * np.sin(2 * np.pi * 440 * t)
+
+        # Test amplitude 0.7123 (should give ~-2.947 dBTP)
+        signal = 0.7123 * np.sin(2 * np.pi * 440 * t)
 
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
             tmp_path = Path(tmp.name)
@@ -251,25 +265,100 @@ class TestSafetyMarginPrecision:
         try:
             analysis = analyzer.analyze(tmp_path)
 
-            # The True Peak should have at least 3 decimal places of precision
-            # This allows us to see differences as small as 0.001 dB
-            # which is necessary to observe the 0.05 dB safety margin
+            # Calculate expected True Peak from the linear amplitude
+            expected_db = 20 * np.log10(0.7123)
 
-            # Round to 3 decimal places and verify it's not just rounded to 1 decimal
+            print(f"\nPrecision Test:")
+            print(f"  Expected True Peak: {expected_db:.3f} dBTP")
+            print(f"  Measured True Peak: {analysis.true_peak_db:.3f} dBTP")
+
+            # The measured value should match the expected value within a small tolerance
+            # This proves we have real precision, not just formatted output
+            tolerance = 0.01  # 0.01 dB tolerance allows for quantization
+            assert abs(analysis.true_peak_db - expected_db) < tolerance, (
+                f"Measured True Peak ({analysis.true_peak_db:.3f} dBTP) should match "
+                f"expected value ({expected_db:.3f} dBTP) within {tolerance} dB"
+            )
+
+            # Verify the measurement has 3 decimal places of precision
+            # by checking it's not just rounded to 1 decimal place
             tp_rounded_3 = round(analysis.true_peak_db, 3)
             tp_rounded_1 = round(analysis.true_peak_db, 1)
 
-            # They should not always be equal (this would indicate low precision)
-            # We don't enforce this strictly for all files, but the measurement
-            # should support 3 decimal places
+            print(f"  3 decimal places: {tp_rounded_3:.3f} dBTP")
+            print(f"  1 decimal place:  {tp_rounded_1:.1f} dBTP")
 
-            print(f"\nPrecision Test:")
-            print(f"  True Peak (3 decimals): {tp_rounded_3:.3f} dBTP")
-            print(f"  True Peak (1 decimal):  {tp_rounded_1:.1f} dBTP")
-
-            # The measurement should be precise enough to distinguish
-            # a 0.05 dB difference
-            assert isinstance(analysis.true_peak_db, float)
+            # For this specific amplitude, they should NOT be equal
+            # (proving we have more than 1 decimal of precision)
+            assert tp_rounded_3 != tp_rounded_1, (
+                f"True Peak measurement appears to have only 1 decimal of precision. "
+                f"Both 3-decimal ({tp_rounded_3:.3f}) and 1-decimal ({tp_rounded_1:.1f}) "
+                f"round to the same value."
+            )
 
         finally:
             tmp_path.unlink()
+
+    def test_true_peak_can_distinguish_small_differences(self):
+        """
+        Test that True Peak measurement can distinguish values
+        separated by less than 0.1 dB.
+
+        This creates two signals with slightly different amplitudes
+        and verifies that the True Peak measurements differ by the
+        expected amount.
+        """
+        analyzer = Analyzer()
+
+        sample_rate = 44100
+        duration = 1.0
+        t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+
+        # Create two signals with amplitude difference that should result
+        # in approximately 0.1 dB difference in True Peak
+        amplitude1 = 0.70
+        amplitude2 = 0.71  # About 0.12 dB difference
+
+        # Expected difference
+        expected_diff_db = 20 * np.log10(amplitude2) - 20 * np.log10(amplitude1)
+
+        # Create first signal
+        signal1 = amplitude1 * np.sin(2 * np.pi * 440 * t)
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+            tmp_path1 = Path(tmp.name)
+            sf.write(str(tmp_path1), signal1, sample_rate, subtype='PCM_16')
+
+        # Create second signal
+        signal2 = amplitude2 * np.sin(2 * np.pi * 440 * t)
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+            tmp_path2 = Path(tmp.name)
+            sf.write(str(tmp_path2), signal2, sample_rate, subtype='PCM_16')
+
+        try:
+            # Analyze both
+            analysis1 = analyzer.analyze(tmp_path1)
+            analysis2 = analyzer.analyze(tmp_path2)
+
+            # Calculate the measured difference
+            measured_diff_db = analysis2.true_peak_db - analysis1.true_peak_db
+
+            print(f"\nSmall Difference Test:")
+            print(f"  Signal 1 True Peak: {analysis1.true_peak_db:.3f} dBTP")
+            print(f"  Signal 2 True Peak: {analysis2.true_peak_db:.3f} dBTP")
+            print(f"  Expected difference: {expected_diff_db:.3f} dB")
+            print(f"  Measured difference: {measured_diff_db:.3f} dB")
+
+            # The measured difference should match the expected difference
+            tolerance = 0.01  # 0.01 dB tolerance
+            assert abs(measured_diff_db - expected_diff_db) < tolerance, (
+                f"Measured difference ({measured_diff_db:.3f} dB) should match "
+                f"expected difference ({expected_diff_db:.3f} dB) within {tolerance} dB"
+            )
+
+            # Verify we can see differences smaller than 0.1 dB
+            assert abs(measured_diff_db) < 0.15, "This test uses signals with <0.15 dB difference"
+            assert abs(measured_diff_db) > 0.05, "The difference should be measurable (>0.05 dB)"
+
+        finally:
+            tmp_path1.unlink()
+            tmp_path2.unlink()

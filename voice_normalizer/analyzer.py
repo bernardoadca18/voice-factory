@@ -92,6 +92,7 @@ class Analyzer:
             sample_rate=sample_rate,
             channels=info.channels,
             bit_depth=bit_depth,
+            subtype=info.subtype,  # Preserve original subtype
             lufs=lufs,
             sample_peak_db=sample_peak_db,
             true_peak_db=true_peak_db,
@@ -122,7 +123,8 @@ class Analyzer:
         Measure true peak using FFmpeg's ebur128 filter with high precision.
 
         Uses 4x oversampling to detect inter-sample peaks that aren't visible
-        in the PCM sample data.
+        in the PCM sample data. Extracts True Peak from frame metadata which
+        provides linear amplitude values with 3 decimal places of precision.
 
         Args:
             file_path: Path to the WAV file.
@@ -134,14 +136,16 @@ class Analyzer:
             TruePeakMeasurementError: If measurement fails.
         """
         try:
-            # Use ebur128 with peak=sample+true to enable both measurements
-            # True peak uses 4x oversampling to detect inter-sample peaks
+            # Use ffprobe with ebur128 filter to extract True Peak metadata
+            # The metadata provides linear amplitude values with higher precision
+            # than the human-readable summary (which only has 1 decimal place)
             cmd = [
-                "ffmpeg",
-                "-i", str(file_path),
-                "-filter_complex", "ebur128=peak=sample+true",
-                "-f", "null",
-                "-"
+                "ffprobe",
+                "-f", "lavfi",
+                "-i", f"amovie={file_path},ebur128=peak=sample+true:metadata=1",
+                "-show_entries", "frame_tags=lavfi.r128.true_peak",
+                "-of", "csv=p=0",
+                "-v", "quiet"
             ]
 
             result = subprocess.run(
@@ -151,37 +155,40 @@ class Analyzer:
                 timeout=60
             )
 
-            # Check return code - only raise if it's a real error
-            # FFmpeg may return warnings but still produce valid output
+            # Check return code
             if result.returncode != 0:
-                # Check if the error is critical (not just warnings)
-                stderr_lower = result.stderr.lower()
-                if "error" in stderr_lower and "invalid" not in stderr_lower:
-                    raise TruePeakMeasurementError(
-                        f"FFmpeg failed with return code {result.returncode}: "
-                        f"{result.stderr[:200]}"
-                    )
-
-            # Parse the summary section from stderr
-            # FFmpeg ebur128 outputs the summary at the end with high precision
-            true_peak_db = self._parse_true_peak_from_stderr(result.stderr)
-
-            if true_peak_db is None:
                 raise TruePeakMeasurementError(
-                    f"Unable to parse True Peak from FFmpeg output. "
-                    f"The ebur128 filter may not have produced the expected output format."
+                    f"FFprobe failed with return code {result.returncode}: "
+                    f"{result.stderr[:200]}"
                 )
 
+            # Parse the linear amplitude value from metadata
+            true_peak_linear = self._parse_true_peak_from_metadata(result.stdout)
+
+            if true_peak_linear is None:
+                raise TruePeakMeasurementError(
+                    f"Unable to parse True Peak from FFprobe output. "
+                    f"The ebur128 filter may not have produced metadata."
+                )
+
+            # Convert linear amplitude to dBTP
+            # FFmpeg metadata reports True Peak as linear amplitude
+            if true_peak_linear <= 0:
+                raise TruePeakMeasurementError(
+                    f"Invalid True Peak value: {true_peak_linear}"
+                )
+
+            true_peak_db = 20 * np.log10(true_peak_linear)
             return true_peak_db
 
         except subprocess.TimeoutExpired:
             raise TruePeakMeasurementError(
-                f"FFmpeg timed out while measuring True Peak for {file_path.name}. "
+                f"FFprobe timed out while measuring True Peak for {file_path.name}. "
                 f"File may be corrupted or too large."
             )
         except FileNotFoundError:
             raise TruePeakMeasurementError(
-                "FFmpeg executable not found. Please install FFmpeg to measure True Peak."
+                "FFprobe executable not found. Please install FFmpeg to measure True Peak."
             )
         except TruePeakMeasurementError:
             raise
@@ -190,50 +197,43 @@ class Analyzer:
                 f"Unexpected error measuring True Peak: {str(e)}"
             )
 
-    def _parse_true_peak_from_stderr(self, stderr: str) -> Optional[float]:
+    def _parse_true_peak_from_metadata(self, stdout: str) -> Optional[float]:
         """
-        Parse True Peak value from FFmpeg ebur128 stderr output.
+        Parse True Peak linear amplitude value from FFprobe metadata output.
 
-        Looks for the Summary section which contains higher precision values.
+        FFprobe outputs frame metadata with lavfi.r128.true_peak values.
+        These values are in linear amplitude (not dB) with 3 decimal places.
+
+        For multi-channel files, we need to find the maximum true peak
+        across all channels (lavfi.r128.true_peaks_ch0, ch1, etc.).
 
         Args:
-            stderr: FFmpeg stderr output.
+            stdout: FFprobe stdout output.
 
         Returns:
-            True Peak in dBTP, or None if not found.
+            True Peak in linear amplitude, or None if not found.
         """
-        lines = stderr.split("\n")
+        lines = stdout.strip().split("\n")
 
-        in_true_peak_section = False
+        max_true_peak = 0.0
 
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-
-            # Detect the True peak section in summary
-            if stripped == "True peak:":
-                in_true_peak_section = True
+        for line in lines:
+            line = line.strip()
+            if not line:
                 continue
 
-            # Parse peak values - look for "Peak:" line with dBFS unit
-            if in_true_peak_section and "Peak:" in stripped and "dBFS" in stripped:
-                try:
-                    # Extract the numeric value
-                    # Format: "Peak:         -3.0 dBFS"
-                    parts = stripped.split("Peak:")
-                    if len(parts) > 1:
-                        peak_part = parts[1].strip()
-                        # Extract number before dBFS
-                        peak_str = peak_part.split("dBFS")[0].strip()
-                        peak_value = float(peak_str)
-                        return peak_value
-                except (ValueError, IndexError):
-                    pass
+            # FFprobe with -of csv=p=0 outputs just the value directly
+            # Format: "0.712"
+            try:
+                true_peak = float(line)
+                if true_peak > max_true_peak:
+                    max_true_peak = true_peak
+            except ValueError:
+                # Skip lines that aren't valid numbers
+                continue
 
-            # Reset section flag when we hit another section
-            if stripped and stripped.endswith(":") and "peak" not in stripped.lower():
-                in_true_peak_section = False
-
-        return None
+        # Return the maximum value found, or None if no values were parsed
+        return max_true_peak if max_true_peak > 0 else None
 
     def _detect_clipping(self, audio: np.ndarray) -> bool:
         """

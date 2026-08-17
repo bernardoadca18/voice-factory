@@ -483,6 +483,7 @@ pytest tests/test_gain.py
 **True Peak Measurement**
 - Uses FFmpeg's `ebur128` filter with `peak=sample+true` for 4x oversampling
 - Detects inter-sample peaks that aren't visible in PCM sample data
+- Extracts True Peak from frame metadata with 3 decimal places precision (sufficient for 0.05 dB safety margin)
 - Raises `TruePeakMeasurementError` on failure (no silent fallback)
 
 **Sample Peak Measurement**
@@ -490,9 +491,11 @@ pytest tests/test_gain.py
 - Measured without oversampling (true sample peak)
 - Always available even if True Peak measurement fails
 
-**Bit Depth Preservation**
-- Output files preserve the original bit depth (PCM_16, PCM_24, PCM_32, FLOAT, DOUBLE)
-- No automatic conversion or bit depth reduction
+**WAV Subtype Preservation**
+- Output files preserve the exact original WAV subtype (PCM_16, PCM_24, PCM_32, FLOAT, DOUBLE)
+- FLOAT files remain FLOAT (not converted to PCM_32)
+- No silent format conversion or bit depth reduction
+- Sample rate and channel count also preserved
 
 **Precision**
 - All peak and gain values reported with 3 decimal places

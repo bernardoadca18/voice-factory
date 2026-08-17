@@ -23,6 +23,7 @@ class AudioAnalysis:
     sample_rate: int
     channels: int
     bit_depth: int
+    subtype: str  # WAV subtype (PCM_16, PCM_24, PCM_32, FLOAT, DOUBLE, etc.)
     lufs: float
     sample_peak_db: float
     true_peak_db: float
@@ -39,6 +40,7 @@ class AudioAnalysis:
             "sample_rate": self.sample_rate,
             "channels": self.channels,
             "bit_depth": self.bit_depth,
+            "subtype": self.subtype,
             "lufs": round(self.lufs, 2),
             "sample_peak_db": round(self.sample_peak_db, 3),
             "true_peak_db": round(self.true_peak_db, 3),

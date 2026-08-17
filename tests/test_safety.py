@@ -386,3 +386,92 @@ class TestIdempotency:
         # Should still only find the original file
         assert len(wav_files) == 1
         assert wav_files[0].parent == input_dir
+
+
+class TestProcessedCount:
+    """Tests for processed count semantics."""
+
+    def test_excessive_gain_not_counted_as_processed(self, tmp_path):
+        """Files refused due to excessive gain should not increment processed count."""
+        config = Config(
+            target_lufs=-20.0,
+            max_true_peak_db=-3.0,
+            max_positive_gain_db=6.0,
+            overwrite_output=True,
+        )
+        processor = Processor(config)
+
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        input_dir.mkdir()
+
+        # Create a very quiet file that needs >+6 dB gain
+        # At amplitude=0.001, LUFS will be very low
+        create_test_wav(input_dir / "quiet.wav", amplitude=0.001)
+
+        report = processor.process_batch(input_dir, output_dir)
+
+        # File should have WARNING status (excessive gain)
+        assert len(report.files) == 1
+        result = report.files[0]
+        assert result.status == FileStatus.WARNING
+        assert result.after is None  # No output produced
+
+        # Processed count should be 0 (no output produced)
+        assert report.summary.processed == 0
+        assert report.summary.warnings == 1
+
+    def test_successful_file_counted_as_processed(self, processor, tmp_path):
+        """Files that produce output should be counted as processed."""
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        input_dir.mkdir()
+
+        # Create a normal file
+        create_test_wav(input_dir / "normal.wav", amplitude=0.5)
+
+        report = processor.process_batch(input_dir, output_dir)
+
+        # File should have been processed
+        assert len(report.files) == 1
+        result = report.files[0]
+
+        # If it passed or had warnings but produced output
+        if result.after is not None:
+            assert report.summary.processed == 1
+
+    def test_mixed_batch_correct_counts(self, tmp_path):
+        """Mixed batch should have correct processed/error/warning counts."""
+        config = Config(
+            target_lufs=-20.0,
+            max_true_peak_db=-3.0,
+            max_positive_gain_db=6.0,
+            reject_source_clipping=True,
+            overwrite_output=True,
+        )
+        processor = Processor(config)
+
+        input_dir = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        input_dir.mkdir()
+
+        # Normal file
+        create_test_wav(input_dir / "normal.wav", amplitude=0.5)
+
+        # Very quiet file (excessive gain)
+        create_test_wav(input_dir / "quiet.wav", amplitude=0.001)
+
+        # Clipped file (rejected)
+        create_clipped_wav(input_dir / "clipped.wav")
+
+        report = processor.process_batch(input_dir, output_dir)
+
+        # Count files by whether they produced output
+        files_with_output = sum(1 for r in report.files if r.after is not None)
+
+        # Processed should match files that produced output
+        assert report.summary.processed == files_with_output
+
+        # Total should sum correctly
+        total = report.summary.passed + report.summary.warnings + report.summary.errors + report.summary.skipped
+        assert total == len(report.files)

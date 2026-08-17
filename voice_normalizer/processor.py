@@ -167,7 +167,7 @@ class Processor:
 
         # Apply gain
         try:
-            self._apply_gain(input_path, output_path, gain_calculation.applied_gain_db, before_analysis.bit_depth)
+            self._apply_gain(input_path, output_path, gain_calculation.applied_gain_db, before_analysis.subtype)
         except Exception as e:
             return FileResult(
                 file=input_path.name,
@@ -223,17 +223,17 @@ class Processor:
             warnings=warnings,
         )
 
-    def _apply_gain(self, input_path: Path, output_path: Path, gain_db: float, bit_depth: int) -> None:
+    def _apply_gain(self, input_path: Path, output_path: Path, gain_db: float, subtype: str) -> None:
         """
         Apply linear gain to audio file using FFmpeg.
 
-        Preserves original bit depth when supported.
+        Preserves original WAV subtype when supported.
 
         Args:
             input_path: Path to input file.
             output_path: Path to output file.
             gain_db: Gain to apply in decibels.
-            bit_depth: Original bit depth to preserve.
+            subtype: Original WAV subtype to preserve (PCM_16, PCM_24, PCM_32, FLOAT, etc.).
         """
         # Ensure output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -241,17 +241,26 @@ class Processor:
         # Calculate linear gain
         gain_linear = 10 ** (gain_db / 20.0)
 
-        # Map bit depth to FFmpeg codec
-        codec_map = {
-            8: "pcm_u8",
-            16: "pcm_s16le",
-            24: "pcm_s24le",
-            32: "pcm_s32le",
-            64: "pcm_f64le",  # Double precision
+        # Map WAV subtype to FFmpeg codec
+        # This ensures we preserve the exact format, not just bit depth
+        subtype_to_codec = {
+            "PCM_16": "pcm_s16le",
+            "PCM_24": "pcm_s24le",
+            "PCM_32": "pcm_s32le",
+            "FLOAT": "pcm_f32le",
+            "DOUBLE": "pcm_f64le",
+            "PCM_U8": "pcm_u8",
+            "PCM_S8": "pcm_s8",
         }
 
-        # Use the original bit depth, defaulting to 16-bit if unknown
-        codec = codec_map.get(bit_depth, "pcm_s16le")
+        # Get the codec for the subtype
+        codec = subtype_to_codec.get(subtype)
+
+        if codec is None:
+            raise ValueError(
+                f"Unsupported WAV subtype: {subtype}. "
+                f"Supported subtypes: {', '.join(subtype_to_codec.keys())}"
+            )
 
         # Use FFmpeg to apply volume filter
         # This preserves the original format and applies only linear gain
@@ -260,7 +269,7 @@ class Processor:
             "-y",  # Overwrite output
             "-i", str(input_path),
             "-af", f"volume={gain_linear}",
-            "-c:a", codec,  # Preserve bit depth
+            "-c:a", codec,  # Preserve subtype
             str(output_path),
         ]
 
@@ -359,7 +368,7 @@ class Processor:
         # Calculate summary
         summary = BatchSummary(
             total_files=len(wav_files),
-            processed=sum(1 for r in results if r.status != FileStatus.SKIPPED),
+            processed=sum(1 for r in results if r.after is not None),
             passed=sum(1 for r in results if r.status == FileStatus.PASS),
             warnings=sum(1 for r in results if r.status == FileStatus.WARNING),
             errors=sum(1 for r in results if r.status == FileStatus.ERROR),
