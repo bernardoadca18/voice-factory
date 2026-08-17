@@ -52,20 +52,22 @@ class Analyzer:
         if lufs == float("-inf"):
             lufs = -100.0  # Very quiet or silent
 
-        # Measure true peak using pyloudnorm's peak method
-        # True peak accounts for inter-sample peaks
-        true_peak_linear = np.max(np.abs(audio))
-        true_peak_db = 20 * np.log10(max(true_peak_linear, 1e-10))
+        # Sample peak from PCM data (without oversampling)
+        sample_peak_linear = np.max(np.abs(audio))
+        sample_peak_db = 20 * np.log10(max(sample_peak_linear, 1e-10))
 
-        # For true peak with oversampling, use FFmpeg ebur128
-        true_peak_db_oversampled = self._measure_true_peak_ffmpeg(file_path)
+        # Measure true peak and sample peak using FFmpeg ebur128
+        # True peak uses 4x oversampling to detect inter-sample peaks
+        true_peak_db_ffmpeg, sample_peak_db_ffmpeg = self._measure_true_peak_ffmpeg(file_path)
 
-        # Sample peak (without oversampling)
-        sample_peak_db = true_peak_db
+        # Use FFmpeg measurements if available, otherwise fall back to numpy
+        if true_peak_db_ffmpeg is not None:
+            true_peak_db = true_peak_db_ffmpeg
+        else:
+            true_peak_db = sample_peak_db
 
-        # Use oversampled true peak if available
-        if true_peak_db_oversampled is not None:
-            true_peak_db = true_peak_db_oversampled
+        if sample_peak_db_ffmpeg is not None:
+            sample_peak_db = sample_peak_db_ffmpeg
 
         # Detect clipping in source
         clipping = self._detect_clipping(audio)
@@ -95,22 +97,24 @@ class Analyzer:
             dc_offset=dc_offset if abs(dc_offset) > self.DC_OFFSET_THRESHOLD else None,
         )
 
-    def _measure_true_peak_ffmpeg(self, file_path: Path) -> Optional[float]:
+    def _measure_true_peak_ffmpeg(self, file_path: Path) -> tuple[Optional[float], Optional[float]]:
         """
-        Measure true peak using FFmpeg's ebur128 filter.
-        This provides more accurate true peak measurement with oversampling.
+        Measure true peak and sample peak using FFmpeg's ebur128 filter.
+        This provides accurate true peak measurement with 4x oversampling.
 
         Args:
             file_path: Path to the WAV file.
 
         Returns:
-            True peak in dBTP, or None if measurement fails.
+            Tuple of (true_peak_db, sample_peak_db), or (None, None) if measurement fails.
         """
         try:
+            # Use peak=sample+true to enable both sample peak and true peak measurement
+            # True peak uses 4x oversampling to detect inter-sample peaks
             cmd = [
                 "ffmpeg",
                 "-i", str(file_path),
-                "-filter_complex", "ebur128",
+                "-filter_complex", "ebur128=peak=sample+true",
                 "-f", "null",
                 "-"
             ]
@@ -122,26 +126,56 @@ class Analyzer:
                 timeout=60
             )
 
-            # Parse the summary line from stderr
-            # Looking for: "  Peak:      -1.2 dBTP"
-            stderr = result.stderr
-            for line in stderr.split("\n"):
-                if "Peak:" in line and "dBTP" in line:
-                    # Parse the peak value
-                    parts = line.split("Peak:")
-                    if len(parts) > 1:
-                        peak_part = parts[1].strip()
-                        # Extract the number before "dBTP"
-                        peak_str = peak_part.split("dBTP")[0].strip()
-                        try:
-                            return float(peak_str)
-                        except ValueError:
-                            pass
+            true_peak_db = None
+            sample_peak_db = None
 
-            return None
+            # Parse the summary section from stderr
+            # FFmpeg ebur128 outputs in format:
+            #   Sample peak:
+            #     Peak:       -1.2 dBFS
+            #   True peak:
+            #     Peak:       -1.0 dBFS
+            stderr = result.stderr
+            lines = stderr.split("\n")
+
+            in_sample_peak_section = False
+            in_true_peak_section = False
+
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+
+                # Detect section headers
+                if stripped == "Sample peak:":
+                    in_sample_peak_section = True
+                    in_true_peak_section = False
+                    continue
+
+                if stripped == "True peak:":
+                    in_true_peak_section = True
+                    in_sample_peak_section = False
+                    continue
+
+                # Parse peak values
+                if "Peak:" in stripped and "dBFS" in stripped:
+                    try:
+                        # Extract the numeric value
+                        parts = stripped.split("Peak:")
+                        if len(parts) > 1:
+                            peak_part = parts[1].strip()
+                            peak_str = peak_part.split("dBFS")[0].strip()
+                            peak_value = float(peak_str)
+
+                            if in_sample_peak_section:
+                                sample_peak_db = peak_value
+                            elif in_true_peak_section:
+                                true_peak_db = peak_value
+                    except (ValueError, IndexError):
+                        pass
+
+            return true_peak_db, sample_peak_db
 
         except Exception:
-            return None
+            return None, None
 
     def _detect_clipping(self, audio: np.ndarray) -> bool:
         """

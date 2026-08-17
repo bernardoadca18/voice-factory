@@ -146,15 +146,15 @@ class TestResultValidation:
         assert status == FileStatus.PASS
         assert warnings == []
 
-    def test_warning_for_lufs_outside_range(self, validator):
-        """LUFS outside acceptable range should produce WARNING."""
+    def test_error_for_lufs_outside_range(self, validator):
+        """LUFS outside acceptable range should produce ERROR."""
         before = make_analysis(lufs=-15.0, true_peak_db=-10.0)
-        after = make_analysis(lufs=-16.0, true_peak_db=-8.0)  # Not close to target, but peak OK
+        after = make_analysis(lufs=-16.0, true_peak_db=-10.0)  # Not close to target, but peak well within limits
         gain = make_gain_calculation(applied_gain_db=-1.0, peak_limited=True)
 
         status, warnings = validator.validate_result(before, after, gain)
 
-        assert status == FileStatus.WARNING
+        assert status == FileStatus.ERROR
         assert any("LUFS" in w for w in warnings)
 
     def test_error_for_peak_exceeded(self, validator):

@@ -27,7 +27,7 @@ class Normalizer:
 
         The gain is calculated to:
         1. Move toward target LUFS
-        2. Respect maximum true peak
+        2. Respect maximum true peak (with safety margin)
         3. Respect maximum positive gain
 
         Args:
@@ -40,10 +40,12 @@ class Normalizer:
         gain_for_target_db = self.config.target_lufs - analysis.lufs
 
         # Calculate maximum gain allowed by true peak constraint
-        # We want: final_true_peak <= max_true_peak_db
-        # So: analysis.true_peak_db + gain <= max_true_peak_db
-        # Therefore: gain <= max_true_peak_db - analysis.true_peak_db
-        gain_allowed_by_peak_db = self.config.max_true_peak_db - analysis.true_peak_db
+        # Use the effective max (with safety margin) for processing
+        # We want: final_true_peak <= effective_max_true_peak_db
+        # So: analysis.true_peak_db + gain <= effective_max_true_peak_db
+        # Therefore: gain <= effective_max_true_peak_db - analysis.true_peak_db
+        effective_peak_ceiling = self.config.effective_max_true_peak_db
+        gain_allowed_by_peak_db = effective_peak_ceiling - analysis.true_peak_db
 
         # Start with the gain needed for target
         applied_gain_db = gain_for_target_db

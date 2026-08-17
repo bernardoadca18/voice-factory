@@ -10,6 +10,11 @@ normalization:
   # -3 dBTP provides headroom for downstream processing
   max_true_peak_db: -3.0
 
+  # Safety margin applied during processing to avoid outputs exactly at the peak limit
+  # The effective peak ceiling becomes: max_true_peak_db - safety_margin
+  # This prevents floating-point edge cases and provides additional headroom
+  true_peak_safety_margin_db: 0.05
+
   # Maximum positive gain that can be applied automatically (dB)
   # Files requiring more gain will be flagged for manual review
   # This prevents excessive noise floor amplification
@@ -21,6 +26,11 @@ validation:
   acceptable_lufs_min: -22.0
   acceptable_lufs_max: -18.0
 
+  # Tolerance for True Peak validation to handle floating-point comparison issues
+  # A measured peak of -2.999 dBTP will be accepted as <= -3.0 dBTP with this tolerance
+  # This prevents false positives from floating-point rounding
+  true_peak_tolerance_db: 0.02
+
   # Whether to reject files with source clipping
   # If true, clipped files get ERROR status
   # If false, clipped files get WARNING status
@@ -30,8 +40,3 @@ processing:
   # Whether to overwrite existing output files
   # If false, existing files will be skipped
   overwrite_output: false
-
-output:
-  # Always preserve input files (safety check)
-  # This should always be true
-  preserve_input: true

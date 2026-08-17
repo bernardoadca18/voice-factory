@@ -73,12 +73,12 @@ class TestGainCalculation:
     def test_peak_limits_gain(self, normalizer):
         """True peak constraint should limit gain when necessary."""
         # Input at -23 LUFS needs +3 dB
-        # But true peak is -4 dBTP, so only +1 dB is allowed
+        # But true peak is -4 dBTP, so only +0.95 dB is allowed (with 0.05 safety margin)
         analysis = make_analysis(lufs=-23.0, true_peak_db=-4.0)
         result = normalizer.calculate_gain(analysis)
 
-        # Should only apply +1 dB to respect peak limit
-        assert result.applied_gain_db == pytest.approx(1.0, abs=0.01)
+        # Should only apply +0.95 dB to respect peak limit (with safety margin)
+        assert result.applied_gain_db == pytest.approx(0.95, abs=0.01)
         assert result.target_reached is False
         assert result.peak_limited is True
 
@@ -106,14 +106,14 @@ class TestGainCalculation:
     def test_both_constraints_active(self, normalizer):
         """When both peak and max gain constraints apply, use the minimum."""
         # Input needs +8 dB for target
-        # But peak allows +2 dB
+        # But peak allows +1.95 dB (with 0.05 safety margin)
         # And max gain is +6 dB
-        # Result: +2 dB (most restrictive)
+        # Result: +1.95 dB (most restrictive)
         analysis = make_analysis(lufs=-28.0, true_peak_db=-5.0)
         result = normalizer.calculate_gain(analysis)
 
-        # Peak constraint (-5 to -3 = +2) is more restrictive than max gain (+6)
-        assert result.applied_gain_db == pytest.approx(2.0, abs=0.01)
+        # Peak constraint (-5 to -3.05 = +1.95) is more restrictive than max gain (+6)
+        assert result.applied_gain_db == pytest.approx(1.95, abs=0.01)
         assert result.peak_limited is True
         assert result.gain_capped is False
 

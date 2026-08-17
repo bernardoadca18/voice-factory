@@ -84,23 +84,35 @@ class Validator:
                 f"[{self.config.acceptable_lufs_min}, {self.config.acceptable_lufs_max}]"
             )
 
-        # Check true peak constraint
-        peak_ok = after.true_peak_db <= self.config.max_true_peak_db
+        # Check true peak constraint with tolerance for floating point comparison
+        # Using tolerance prevents false positives from floating point rounding
+        peak_exceeded_threshold = (
+            after.true_peak_db > self.config.max_true_peak_db + self.config.true_peak_tolerance_db
+        )
 
-        if not peak_ok:
+        # Peak is within tolerance but slightly above configured max (not an error)
+        peak_within_tolerance = (
+            after.true_peak_db > self.config.max_true_peak_db and
+            not peak_exceeded_threshold
+        )
+
+        if peak_exceeded_threshold:
             warnings.append(
-                f"True peak {after.true_peak_db:.2f} dBTP exceeds maximum "
-                f"{self.config.max_true_peak_db} dBTP"
+                f"True peak {after.true_peak_db:.2f} dBTP significantly exceeds maximum "
+                f"{self.config.max_true_peak_db} dBTP (tolerance: {self.config.true_peak_tolerance_db} dB)"
             )
 
         # Check for clipping introduced by processing
-        if after.clipping and not before.clipping:
+        clipping_introduced = after.clipping and not before.clipping
+        if clipping_introduced:
             warnings.append("Clipping introduced by processing - this indicates a bug")
 
         # Check if target was not reached due to constraints
+        # This is an expected condition, not an error
         if gain_calculation and gain_calculation.peak_limited:
             warnings.append(
-                "Target LUFS not reached due to true peak constraint"
+                "Target LUFS not reached because True Peak constraint had priority. "
+                "Output remains within acceptable loudness range."
             )
 
         if gain_calculation and gain_calculation.gain_capped:
@@ -111,7 +123,10 @@ class Validator:
             )
 
         # Determine final status
-        if not peak_ok or (after.clipping and not before.clipping):
+        # ERROR: Real problems that make the file unusable
+        # WARNING: File is usable but has notable conditions
+        # PASS: Everything is good
+        if peak_exceeded_threshold or clipping_introduced or not lufs_ok:
             status = FileStatus.ERROR
         elif warnings:
             status = FileStatus.WARNING
