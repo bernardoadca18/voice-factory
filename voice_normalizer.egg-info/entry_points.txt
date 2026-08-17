@@ -1,0 +1,2 @@
+[console_scripts]
+voice-normalizer = voice_normalizer.cli:app

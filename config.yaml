@@ -1,0 +1,37 @@
+# Voice Dataset Normalizer Configuration
+# Edit these values to customize normalization behavior
+
+normalization:
+  # Target integrated loudness (LUFS)
+  # -20 LUFS is a good baseline for voice datasets
+  target_lufs: -20.0
+
+  # Maximum allowed True Peak (dBTP)
+  # -3 dBTP provides headroom for downstream processing
+  max_true_peak_db: -3.0
+
+  # Maximum positive gain that can be applied automatically (dB)
+  # Files requiring more gain will be flagged for manual review
+  # This prevents excessive noise floor amplification
+  max_positive_gain_db: 6.0
+
+validation:
+  # Acceptable LUFS range after normalization
+  # Files outside this range will receive WARNING status
+  acceptable_lufs_min: -22.0
+  acceptable_lufs_max: -18.0
+
+  # Whether to reject files with source clipping
+  # If true, clipped files get ERROR status
+  # If false, clipped files get WARNING status
+  reject_source_clipping: true
+
+processing:
+  # Whether to overwrite existing output files
+  # If false, existing files will be skipped
+  overwrite_output: false
+
+output:
+  # Always preserve input files (safety check)
+  # This should always be true
+  preserve_input: true
