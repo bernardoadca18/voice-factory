@@ -13,27 +13,32 @@ normalization:
   # Safety margin applied during processing to avoid outputs exactly at the peak limit
   # The effective peak ceiling becomes: max_true_peak_db - safety_margin
   # This prevents floating-point edge cases and provides additional headroom
+  # With max_true_peak_db = -3.0 and safety_margin = 0.05, the effective ceiling is -3.05 dBTP
   true_peak_safety_margin_db: 0.05
 
   # Maximum positive gain that can be applied automatically (dB)
-  # Files requiring more gain will be flagged for manual review
+  # Files requiring more gain will NOT be processed automatically and require manual review
   # This prevents excessive noise floor amplification
   max_positive_gain_db: 6.0
 
 validation:
   # Acceptable LUFS range after normalization
-  # Files outside this range will receive WARNING status
+  # Files outside this range will receive ERROR status (not WARNING)
+  # This range defines the quality envelope for processed voice datasets
   acceptable_lufs_min: -22.0
   acceptable_lufs_max: -18.0
 
   # Tolerance for True Peak validation to handle floating-point comparison issues
   # A measured peak of -2.999 dBTP will be accepted as <= -3.0 dBTP with this tolerance
   # This prevents false positives from floating-point rounding
+  # Note: This is DIFFERENT from safety_margin
+  #   - safety_margin: applied during processing (affects the target ceiling)
+  #   - tolerance: applied during validation (allows for measurement uncertainty)
   true_peak_tolerance_db: 0.02
 
   # Whether to reject files with source clipping
-  # If true, clipped files get ERROR status
-  # If false, clipped files get WARNING status
+  # If true, clipped files get ERROR status and are not processed
+  # If false, clipped files get WARNING status but are still processed
   reject_source_clipping: true
 
 processing:

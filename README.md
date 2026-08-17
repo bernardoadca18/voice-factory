@@ -87,11 +87,13 @@ Create a `config.yaml` file to customize behavior:
 normalization:
   target_lufs: -20.0
   max_true_peak_db: -3.0
+  true_peak_safety_margin_db: 0.05
   max_positive_gain_db: 6.0
 
 validation:
   acceptable_lufs_min: -22.0
   acceptable_lufs_max: -18.0
+  true_peak_tolerance_db: 0.02
   reject_source_clipping: true
 
 processing:
@@ -104,9 +106,11 @@ processing:
 |--------|-------------|---------|
 | `target_lufs` | Target integrated loudness | -20.0 |
 | `max_true_peak_db` | Maximum true peak allowed | -3.0 |
-| `max_positive_gain_db` | Maximum gain that can be applied automatically | 6.0 |
-| `acceptable_lufs_min` | Minimum acceptable LUFS after processing | -22.0 |
-| `acceptable_lufs_max` | Maximum acceptable LUFS after processing | -18.0 |
+| `true_peak_safety_margin_db` | Safety margin applied during processing | 0.05 |
+| `max_positive_gain_db` | Maximum gain that can be applied automatically (files requiring more are refused) | 6.0 |
+| `acceptable_lufs_min` | Minimum acceptable LUFS after processing (files outside range get ERROR) | -22.0 |
+| `acceptable_lufs_max` | Maximum acceptable LUFS after processing (files outside range get ERROR) | -18.0 |
+| `true_peak_tolerance_db` | Tolerance for true peak validation | 0.02 |
 | `reject_source_clipping` | Reject files with source clipping | true |
 | `overwrite_output` | Overwrite existing output files | false |
 
@@ -228,9 +232,8 @@ Input: -30 LUFS
 Target: -20 LUFS
 Required: +10 dB
 Max allowed: +6 dB
-Result: Apply +6 dB
-Output: ~-24 LUFS
-Status: WARNING (manual review recommended)
+Result: File refused (requires manual review)
+Status: WARNING (file not processed)
 ```
 
 ## Why Only Linear Gain?
@@ -269,7 +272,7 @@ Each processing run generates two reports:
 
 ### JSON Report (`report.json`)
 
-Complete details for each file:
+Complete details for each file with 3 decimal places precision for peaks and gain:
 
 ```json
 {
@@ -280,19 +283,24 @@ Complete details for each file:
     "duration_seconds": 7.1,
     "sample_rate": 44100,
     "channels": 1,
+    "bit_depth": 16,
     "lufs": -17.58,
-    "sample_peak_db": -1.30,
-    "true_peak_db": -1.27,
+    "sample_peak_db": -1.300,
+    "true_peak_db": -1.270,
     "clipping": false
   },
   "processing": {
-    "gain_for_target_db": -2.42,
-    "gain_allowed_by_peak_db": -1.73,
-    "applied_gain_db": -2.42
+    "gain_for_target_db": -2.420,
+    "gain_allowed_by_peak_db": -1.730,
+    "applied_gain_db": -2.420,
+    "target_reached": true,
+    "peak_limited": false,
+    "gain_capped": false
   },
   "after": {
     "lufs": -20.00,
-    "true_peak_db": -3.69,
+    "sample_peak_db": -3.730,
+    "true_peak_db": -3.690,
     "clipping": false
   },
   "status": "PASS",
@@ -321,14 +329,14 @@ Summary view for spreadsheet analysis:
 **"Target LUFS not reached due to true peak constraint"**
 The file's true peak limited the gain that could be applied. The file is quieter than target but safe from clipping.
 
-**"Gain limited to X dB - manual review recommended"**
-The file was very quiet and would have required excessive gain. This could amplify noise floor or other issues. Review manually.
+**"Required positive gain exceeds automatic safety limit"**
+The file was very quiet and would have required excessive gain (+6 dB limit). The file is not processed automatically and requires manual review.
 
 **"Source audio has clipping"**
 The original file has clipped samples. This cannot be fixed with gain reduction - the waveform is already damaged.
 
 **"LUFS outside acceptable range"**
-The final loudness is outside the configured acceptable range. This typically accompanies other warnings.
+The final loudness is outside the configured acceptable range. Files outside the acceptable_lufs_min/max range receive ERROR status (not WARNING).
 
 ## Processing Your Dataset
 
@@ -469,6 +477,27 @@ pytest tests/test_gain.py
 - No resampling or format conversion
 - No repair of damaged audio
 - No noise reduction or enhancement
+
+### Technical Implementation
+
+**True Peak Measurement**
+- Uses FFmpeg's `ebur128` filter with `peak=sample+true` for 4x oversampling
+- Detects inter-sample peaks that aren't visible in PCM sample data
+- Raises `TruePeakMeasurementError` on failure (no silent fallback)
+
+**Sample Peak Measurement**
+- Calculated independently via NumPy from PCM samples
+- Measured without oversampling (true sample peak)
+- Always available even if True Peak measurement fails
+
+**Bit Depth Preservation**
+- Output files preserve the original bit depth (PCM_16, PCM_24, PCM_32, FLOAT, DOUBLE)
+- No automatic conversion or bit depth reduction
+
+**Precision**
+- All peak and gain values reported with 3 decimal places
+- Safety margin (0.05 dB) applied during processing to prevent edge cases
+- Tolerance (0.02 dB) applied during validation for measurement uncertainty
 
 ## License
 

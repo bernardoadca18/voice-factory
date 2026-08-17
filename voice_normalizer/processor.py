@@ -9,7 +9,7 @@ from typing import Iterator, Optional
 import numpy as np
 import soundfile as sf
 
-from .analyzer import Analyzer
+from .analyzer import Analyzer, TruePeakMeasurementError
 from .config import Config
 from .models import (
     AudioAnalysis,
@@ -94,6 +94,17 @@ class Processor:
         # Analyze input
         try:
             before_analysis = self.analyzer.analyze(input_path)
+        except TruePeakMeasurementError as e:
+            return FileResult(
+                file=input_path.name,
+                input_path=str(input_path),
+                output_path=None,
+                before=None,
+                processing=None,
+                after=None,
+                status=FileStatus.ERROR,
+                error=f"True Peak measurement failed: {str(e)}",
+            )
         except Exception as e:
             return FileResult(
                 file=input_path.name,
@@ -137,16 +148,26 @@ class Processor:
         # Calculate gain
         gain_calculation = self.normalizer.calculate_gain(before_analysis)
 
-        # Check for excessive gain requirement
+        # Check for excessive gain requirement - refuse automatic processing
         if self.normalizer.check_gain_excessive(gain_calculation):
-            warnings.append(
-                f"Required gain {gain_calculation.gain_for_target_db:.2f} dB exceeds "
-                f"maximum {self.config.max_positive_gain_db} dB - manual review recommended"
+            return FileResult(
+                file=input_path.name,
+                input_path=str(input_path),
+                output_path=None,
+                before=before_analysis,
+                processing=gain_calculation,
+                after=None,
+                status=FileStatus.WARNING,
+                warnings=[
+                    f"Required positive gain ({gain_calculation.gain_for_target_db:+.2f} dB) "
+                    f"exceeds automatic safety limit (+{self.config.max_positive_gain_db} dB). "
+                    f"File requires manual review and was not processed."
+                ],
             )
 
         # Apply gain
         try:
-            self._apply_gain(input_path, output_path, gain_calculation.applied_gain_db)
+            self._apply_gain(input_path, output_path, gain_calculation.applied_gain_db, before_analysis.bit_depth)
         except Exception as e:
             return FileResult(
                 file=input_path.name,
@@ -162,6 +183,17 @@ class Processor:
         # Analyze output
         try:
             after_analysis = self.analyzer.analyze(output_path)
+        except TruePeakMeasurementError as e:
+            return FileResult(
+                file=input_path.name,
+                input_path=str(input_path),
+                output_path=str(output_path),
+                before=before_analysis,
+                processing=gain_calculation,
+                after=None,
+                status=FileStatus.ERROR,
+                error=f"True Peak measurement failed on output: {str(e)}",
+            )
         except Exception as e:
             return FileResult(
                 file=input_path.name,
@@ -191,20 +223,35 @@ class Processor:
             warnings=warnings,
         )
 
-    def _apply_gain(self, input_path: Path, output_path: Path, gain_db: float) -> None:
+    def _apply_gain(self, input_path: Path, output_path: Path, gain_db: float, bit_depth: int) -> None:
         """
         Apply linear gain to audio file using FFmpeg.
+
+        Preserves original bit depth when supported.
 
         Args:
             input_path: Path to input file.
             output_path: Path to output file.
             gain_db: Gain to apply in decibels.
+            bit_depth: Original bit depth to preserve.
         """
         # Ensure output directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Calculate linear gain
         gain_linear = 10 ** (gain_db / 20.0)
+
+        # Map bit depth to FFmpeg codec
+        codec_map = {
+            8: "pcm_u8",
+            16: "pcm_s16le",
+            24: "pcm_s24le",
+            32: "pcm_s32le",
+            64: "pcm_f64le",  # Double precision
+        }
+
+        # Use the original bit depth, defaulting to 16-bit if unknown
+        codec = codec_map.get(bit_depth, "pcm_s16le")
 
         # Use FFmpeg to apply volume filter
         # This preserves the original format and applies only linear gain
@@ -213,7 +260,7 @@ class Processor:
             "-y",  # Overwrite output
             "-i", str(input_path),
             "-af", f"volume={gain_linear}",
-            "-c:a", "pcm_s16le",  # Keep as 16-bit PCM WAV
+            "-c:a", codec,  # Preserve bit depth
             str(output_path),
         ]
 

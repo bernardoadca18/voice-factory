@@ -40,8 +40,8 @@ class AudioAnalysis:
             "channels": self.channels,
             "bit_depth": self.bit_depth,
             "lufs": round(self.lufs, 2),
-            "sample_peak_db": round(self.sample_peak_db, 2),
-            "true_peak_db": round(self.true_peak_db, 2),
+            "sample_peak_db": round(self.sample_peak_db, 3),
+            "true_peak_db": round(self.true_peak_db, 3),
             "clipping": self.clipping,
             "rms_db": round(self.rms_db, 2) if self.rms_db is not None else None,
             "dc_offset": round(self.dc_offset, 6) if self.dc_offset is not None else None,
@@ -61,9 +61,9 @@ class GainCalculation:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            "gain_for_target_db": round(self.gain_for_target_db, 2),
-            "gain_allowed_by_peak_db": round(self.gain_allowed_by_peak_db, 2),
-            "applied_gain_db": round(self.applied_gain_db, 2),
+            "gain_for_target_db": round(self.gain_for_target_db, 3),
+            "gain_allowed_by_peak_db": round(self.gain_allowed_by_peak_db, 3),
+            "applied_gain_db": round(self.applied_gain_db, 3),
             "target_reached": self.target_reached,
             "peak_limited": self.peak_limited,
             "gain_capped": self.gain_capped,
@@ -124,7 +124,7 @@ class BatchSummary:
             "skipped": self.skipped,
             "average_lufs_before": round(self.average_lufs_before, 2) if self.average_lufs_before is not None else None,
             "average_lufs_after": round(self.average_lufs_after, 2) if self.average_lufs_after is not None else None,
-            "maximum_true_peak_after": round(self.maximum_true_peak_after, 2) if self.maximum_true_peak_after is not None else None,
+            "maximum_true_peak_after": round(self.maximum_true_peak_after, 3) if self.maximum_true_peak_after is not None else None,
         }
 
 

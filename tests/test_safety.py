@@ -154,18 +154,20 @@ class TestLinearGainOnly:
 
         create_test_wav(input_file, amplitude=0.3)
 
-        # Patch subprocess.run to capture the FFmpeg command
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stderr="")
+        # Patch subprocess.run in both modules to capture the FFmpeg command
+        with patch("voice_normalizer.processor.subprocess.run") as mock_processor_run, \
+             patch("voice_normalizer.analyzer.subprocess.run") as mock_analyzer_run:
+            mock_processor_run.return_value = MagicMock(returncode=0, stderr="")
+            mock_analyzer_run.return_value = MagicMock(returncode=0, stderr="")
 
             try:
                 result = processor.process_file(input_file, output_file)
             except Exception:
                 pass
 
-            # Check that FFmpeg was called
-            if mock_run.call_count > 0:
-                call_args = mock_run.call_args
+            # Check that FFmpeg was called for processing (volume application)
+            if mock_processor_run.call_count > 0:
+                call_args = mock_processor_run.call_args
                 cmd = call_args[0][0] if call_args[0] else []
 
                 # Should use volume filter

@@ -377,43 +377,36 @@ def validate(
     table.add_column("Issues")
 
     passed = 0
-    warnings = 0
-    errors = 0
+    warnings_count = 0
+    errors_count = 0
 
     for wav_file in wav_files:
         try:
             analysis = analyzer.analyze(wav_file)
 
-            # Check against targets
-            issues = []
+            # Use centralized validation logic
+            status, warnings_list = validator.validate_normalized_file(analysis)
 
-            if analysis.lufs < config.acceptable_lufs_min:
-                issues.append(f"LUFS below {config.acceptable_lufs_min}")
-            elif analysis.lufs > config.acceptable_lufs_max:
-                issues.append(f"LUFS above {config.acceptable_lufs_max}")
+            # Map status to display
+            status_display = {
+                FileStatus.PASS: "[green]PASS[/green]",
+                FileStatus.WARNING: "[yellow]WARN[/yellow]",
+                FileStatus.ERROR: "[red]FAIL[/red]",
+            }
 
-            if analysis.true_peak_db > config.max_true_peak_db:
-                issues.append(f"TP above {config.max_true_peak_db} dBTP")
-
-            if analysis.clipping:
-                issues.append("Clipping detected")
-
-            if not issues:
-                status = "[green]PASS[/green]"
+            if status == FileStatus.PASS:
                 passed += 1
-            elif analysis.true_peak_db > config.max_true_peak_db or analysis.clipping:
-                status = "[red]FAIL[/red]"
-                errors += 1
+            elif status == FileStatus.WARNING:
+                warnings_count += 1
             else:
-                status = "[yellow]WARN[/yellow]"
-                warnings += 1
+                errors_count += 1
 
             table.add_row(
                 analysis.filename,
                 f"{analysis.lufs:.2f}",
                 f"{analysis.true_peak_db:.2f}",
-                status,
-                "; ".join(issues) if issues else "-",
+                status_display[status],
+                "; ".join(warnings_list) if warnings_list else "-",
             )
 
         except Exception as e:
@@ -424,15 +417,15 @@ def validate(
                 "[red]ERROR[/red]",
                 str(e)[:30],
             )
-            errors += 1
+            errors_count += 1
 
     console.print(table)
 
     # Summary
     console.print(f"\n[bold]Summary:[/bold]")
     console.print(f"  Passed:   [green]{passed}[/green]")
-    console.print(f"  Warnings: [yellow]{warnings}[/yellow]")
-    console.print(f"  Errors:   [red]{errors}[/red]")
+    console.print(f"  Warnings: [yellow]{warnings_count}[/yellow]")
+    console.print(f"  Errors:   [red]{errors_count}[/red]")
 
 
 @app.command()

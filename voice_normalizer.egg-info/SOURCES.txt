@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 tests/test_gain.py
 tests/test_safety.py
+tests/test_true_peak.py
 tests/test_validation.py
 voice_normalizer/__init__.py
 voice_normalizer/analyzer.py
